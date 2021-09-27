@@ -61,6 +61,7 @@ info[makeAnonFile]  = ['pointer', ['pointer', 'int', 'string']]
 info[save]          = ['pointer', ['pointer', 'string']]
 info[getDcmSize]    = ['int', []]
 
+// 동적 라이브러리 호출 및 함수 주소 받아오기
 const _anonlib : keyable = ffi.Library(libpath, info)
 
 

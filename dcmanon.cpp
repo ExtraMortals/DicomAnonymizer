@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <dcmtk/dcmdata/dcwcache.h>
 #include "dcostrms.h"
+#include "dcostrmpp.h"
 #include <vector>
 #include <cassert>
 #include <curl/curl.h>
@@ -13,25 +14,21 @@
 #include <dcmtk/dcmdata/dcostrmb.h>
 #include <future>
 
+#define CHUNK_SIZE 200000
+
 struct CurlUpload
 {
-	void *buffer;
+	char *buffer;
 	size_t bsize;
+	size_t written;
 };
-
-size_t read_callback(char *buffer, size_t size, size_t nitems, void *userdata)
-{
-	auto cu = reinterpret_cast<CurlUpload *>(userdata);
-
-	memcpy(buffer, cu->buffer, cu->bsize);
-	return cu->bsize;
-}
 
 DcmAnon::DcmAnon(const char *filepath) : filepath(filepath)
 {
 	ff.loadFile(filepath);
 	ds = ff.getDataset();
 }
+
 const char *DcmAnon::getValue(patientInfo pInfo)
 {
 	const char *tmp = "";
@@ -93,6 +90,17 @@ DcmAnon &DcmAnon::setValue(const DcmTagKey &tag, const char *substitute)
 	return *this;
 }
 
+size_t read_callback(char *buffer, size_t size, size_t nitems, void *userdata)
+{
+	if (nitems * size)
+	{
+		auto cu = reinterpret_cast<CurlUpload *>(userdata);
+		memcpy(buffer, cu->buffer + cu->written, nitems * size);
+		cu->written += nitems * size;
+	}
+	return nitems * size;
+}
+
 DcmAnon &DcmAnon::save(const char *filename)
 {
 	using boost::network::uri::uri;
@@ -114,24 +122,33 @@ DcmAnon &DcmAnon::save(const char *filename)
 	else
 	{
 		uri url(filename);
-		CurlUpload cu = {new char[123], 123};
-		if (url.is_valid() && url.scheme() == "ftp")
+		if (url.is_valid() && url.scheme() == "ftp") // case : valid ftp scheme
 		{
-			auto future = std::async([url, cu]
+			auto buf = new DcmVectorStream();
+			DcmWriteCache wcache;
+			if (buf->status().good())
+			{
+				ff.transferInit();
+				ff.write(*buf, EXS_Unknown, EET_UndefinedLength, &wcache, EGL_recalcGL, EPD_noChange, 0, 0, 0, EWM_createNewMeta);
+				ff.transferEnd();
+			}
+			CurlUpload cu = {const_cast<char*>(buf->getVector().data()), buf->getVector().size()};
+			auto future = std::async([&url, &cu]
 									 {
 										 curl_global_init(CURL_GLOBAL_ALL);
 										 const auto upload_as = "ftp://" + url.host() + url.path();
 										 const auto port = url.port() == "" ? 21 : stoi(url.port());
-										 std::string result = "initialization failed";
+										 std::string result = "curl initialization failed";
 
 										 CURL *curl = curl_easy_init();
 										 if (curl)
 										 {
-											 curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
 											 curl_easy_setopt(curl, CURLOPT_URL, upload_as.c_str());
-											 curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+											 if (url.user_info().size())
+												curl_easy_setopt(curl, CURLOPT_USERPWD, url.user_info().c_str());
+											 curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+											 curl_easy_setopt(curl, CURLOPT_UPLOAD, true);
 											 curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)cu.bsize);
-											 curl_easy_setopt(curl, CURLOPT_USERPWD, url.user_info().c_str());
 											 curl_easy_setopt(curl, CURLOPT_READDATA, cu);
 											 result = curl_easy_strerror(curl_easy_perform(curl));
 										 }
@@ -140,14 +157,14 @@ DcmAnon &DcmAnon::save(const char *filename)
 									 });
 			try
 			{
-				std::cout << "future get : " << future.get() << std::endl;
+				std::cout << "future result : " << future.get() << std::endl;
 			}
-			catch (...)
+			catch (const char *s)
 			{
-				std::cerr << "exception occured" << std::endl;
+				std::cerr << "exception occured" << std::hex << s << std::endl;
 			}
 		}
-		else
+		else // case : default
 		{
 			ff.saveFile(filename);
 		}
@@ -194,18 +211,21 @@ DcmAnon &DcmAnon::makeAnonFile(int pInfo, const char *substitute)
 	}
 	return *this;
 }
-
-extern "C" EXPORT int getDcmSize()
+extern "C" EXPORT constexpr int getDcmSize()
 {
 	return sizeof(DcmAnon);
 }
 
+// ============================================================================================
+
 #ifdef _WIN32
+#ifdef _DEBUG
 extern "C" EXPORT void test(const char *input, const char *output)
 {
 	DcmAnon d(input);
 	d.save(output);
 }
+#endif
 
 BOOL APIENTRY DllMain(HMODULE hMod, DWORD ulreason, LPVOID)
 {
@@ -234,3 +254,9 @@ int main()
 	return 0;
 }
 #endif
+
+// ==============================================
+// 1 vs -> sln 거기서작업
+// vscode 파일들 cmake
+// cmake -> make  -> .a,   .so
+//       -> sln   -> .exe, .dll

@@ -9,7 +9,7 @@ int main(){
         if (test)
         {
             std::cout << test << std::endl;
-            test("C:\\Users\\jychoi\\Downloads\\MR\\sample.dcm", "ftp://jychoi:jychoi@192.168.1.70/eefeswfswesfe.txt");
+            test("C:\\Users\\jychoi\\Downloads\\MR\\sample.dcm", "ftp://jychoi:jychoi@192.168.1.70/largefile.dcm");
         }
     }
 }
